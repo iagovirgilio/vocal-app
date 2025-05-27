@@ -1,0 +1,30 @@
+services:
+  vocal-app:
+    build:
+      context: .  # Caminho do seu projeto (ajuste se necessário)
+    container_name: vocal-app
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.vocal-app.rule=Host(`${VOCAL_SUBDOMAIN}.${DOMAIN_NAME}`)
+      - traefik.http.routers.vocal-app.tls=true
+      - traefik.http.routers.vocal-app.entrypoints=web,websecure
+      - traefik.http.routers.vocal-app.tls.certresolver=mytlschallenge
+      - traefik.http.middlewares.vocal-app.headers.SSLRedirect=true
+      - traefik.http.middlewares.vocal-app.headers.STSSeconds=315360000
+      - traefik.http.middlewares.vocal-app.headers.browserXSSFilter=true
+      - traefik.http.middlewares.vocal-app.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.vocal-app.headers.forceSTSHeader=true
+      - traefik.http.middlewares.vocal-app.headers.SSLHost=${DOMAIN_NAME}
+      - traefik.http.middlewares.vocal-app.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.vocal-app.headers.STSPreload=true
+      - traefik.http.routers.vocal-app.middlewares=vocal-app@docker
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    expose:
+      - "8501"
+    # volumes:  # Descomente se quiser persistir arquivos
+    #   - ./alguma-pasta:/app/alguma-pasta
+
+# Não defina volumes traefik_data ou traefik aqui, pois o Traefik já está rodando em outro compose.

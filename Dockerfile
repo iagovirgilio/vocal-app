@@ -11,7 +11,7 @@ COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Expõe a porta padrão do Streamlit
-EXPOSE 8501
+EXPOSE 8080
 
 # Comando para rodar o Streamlit
-CMD ["streamlit", "run", "vocal_app.py", "--server.port=8501", "--server.address=0.0.0.0"] 
+CMD ["sh", "-c", "streamlit run vocal_app.py --server.port=$PORT --server.address=0.0.0.0"]

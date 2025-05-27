@@ -3,7 +3,7 @@ import sys
 from io import StringIO
 import os
 
-port = int(os.environ.get("PORT", 8501))
+port = int(os.environ.get("PORT", 8080))
 
 
 # Importar a classe VocalRangeCalculator

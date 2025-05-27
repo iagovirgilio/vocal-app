@@ -430,12 +430,12 @@ def get_song_inputs(calc: VocalRangeCalculator) -> Tuple[str, int, str, int, str
 
     col3, col4 = st.sidebar.columns(2)
     with col3:
-        song_low_note = st.selectbox("Nota mais grave", notes, index=5, key="song_low")
+        song_low_note = st.selectbox("Nota mais grave", notes, index=2, key="song_low")
         song_low_octave = st.selectbox("Oitava", octaves, index=3, key="song_low_oct")
 
     with col4:
-        song_high_note = st.selectbox("Nota mais aguda", notes, index=2, key="song_high")
-        song_high_octave = st.selectbox("Oitava  ", octaves, index=5, key="song_high_oct")
+        song_high_note = st.selectbox("Nota mais aguda", notes, index=7, key="song_high")
+        song_high_octave = st.selectbox("Oitava  ", octaves, index=4, key="song_high_oct")
 
     # Tonalidade da música (obrigatória)
     st.sidebar.subheader("🎼 Tonalidade da Música")

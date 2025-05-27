@@ -592,10 +592,4 @@ def main():
         """)
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) == 1:
-        import streamlit.web.cli as stcli
-        sys.argv = ["streamlit", "run", "vocal_app.py", "--server.port", str(port), "--server.address", "0.0.0.0"]
-        sys.exit(stcli.main())
-    else:
-        main()
+    main()

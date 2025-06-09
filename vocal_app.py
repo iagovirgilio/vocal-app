@@ -3,6 +3,11 @@
 import os
 from typing import Dict, List, Optional, Tuple, Union
 import streamlit as st
+import numpy as np
+from synthesizer import Player, Synthesizer, Waveform
+import io
+import base64
+import wave
 
 
 # Constantes
@@ -392,25 +397,27 @@ def setup_page() -> None:
     </div>
     """, unsafe_allow_html=True)
 
-def get_singer_inputs() -> Tuple[str, int, str, int]:
-    """Obtém as entradas do usuário para a extensão vocal.
-
-    Returns:
-        Tupla contendo (nota mais grave, oitava mais grave, nota mais aguda, oitava mais aguda)
-    """
+def get_singer_inputs(default_low_note=None, default_low_octave=None, default_high_note=None, default_high_octave=None) -> Tuple[str, int, str, int]:
+    """Obtém as entradas do usuário para a extensão vocal, com valores padrão opcionais."""
     st.sidebar.subheader("🎤 Extensão Vocal do Cantor")
 
     notes = NOTES_PT
-    octaves = list(range(0, 8))
+    octaves = list(range(1, 9))  # Apenas da oitava 1 até a 8
+
+    # Determinar índices padrão
+    low_note_index = notes.index(default_low_note) if default_low_note in notes else 0
+    low_octave_index = octaves.index(default_low_octave) if default_low_octave in octaves else 0
+    high_note_index = notes.index(default_high_note) if default_high_note in notes else 7
+    high_octave_index = octaves.index(default_high_octave) if default_high_octave in octaves else 3
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        singer_low_note = st.selectbox("Nota mais grave", notes, index=0, key="singer_low")
-        singer_low_octave = st.selectbox("Oitava", octaves, index=2, key="singer_low_oct")
+        singer_low_note = st.selectbox("Nota mais grave", notes, index=low_note_index, key="singer_low")
+        singer_low_octave = st.selectbox("Oitava", octaves, index=low_octave_index, key="singer_low_oct")
 
     with col2:
-        singer_high_note = st.selectbox("Nota mais aguda", notes, index=7, key="singer_high")
-        singer_high_octave = st.selectbox("Oitava ", octaves, index=4, key="singer_high_oct")
+        singer_high_note = st.selectbox("Nota mais aguda", notes, index=high_note_index, key="singer_high")
+        singer_high_octave = st.selectbox("Oitava ", octaves, index=high_octave_index, key="singer_high_oct")
 
     return singer_low_note, singer_low_octave, singer_high_note, singer_high_octave
 
@@ -426,16 +433,16 @@ def get_song_inputs(calc: VocalRangeCalculator) -> Tuple[str, int, str, int, str
     st.sidebar.subheader("🎵 Extensão da Música")
 
     notes = NOTES_PT
-    octaves = list(range(0, 8))
+    octaves = list(range(1, 9))  # Apenas da oitava 1 até a 8
 
     col3, col4 = st.sidebar.columns(2)
     with col3:
         song_low_note = st.selectbox("Nota mais grave", notes, index=2, key="song_low")
-        song_low_octave = st.selectbox("Oitava", octaves, index=3, key="song_low_oct")
+        song_low_octave = st.selectbox("Oitava", octaves, index=2, key="song_low_oct")
 
     with col4:
         song_high_note = st.selectbox("Nota mais aguda", notes, index=7, key="song_high")
-        song_high_octave = st.selectbox("Oitava  ", octaves, index=4, key="song_high_oct")
+        song_high_octave = st.selectbox("Oitava  ", octaves, index=3, key="song_high_oct")
 
     # Tonalidade da música (obrigatória)
     st.sidebar.subheader("🎼 Tonalidade da Música")
@@ -582,6 +589,283 @@ def display_instructions() -> None:
     - Analise as margens de conforto
     """)
 
+def get_voice_type(total_range: int, lowest_note: str, lowest_octave: int) -> str:
+    """Determina o tipo de voz baseado na extensão e notas.
+    
+    Args:
+        total_range: Extensão total em semitons
+        lowest_note: Nota mais grave
+        lowest_octave: Oitava da nota mais grave
+        
+    Returns:
+        String com o tipo de voz
+    """
+    # Mapeamento de tipos de voz
+    voice_types = {
+        'Soprano': {'range': (12, 20), 'lowest': ('Dó', 4)},
+        'Mezzo-soprano': {'range': (12, 18), 'lowest': ('Lá', 3)},
+        'Contralto': {'range': (12, 16), 'lowest': ('Fá', 3)},
+        'Tenor': {'range': (12, 18), 'lowest': ('Dó', 3)},
+        'Barítono': {'range': (12, 16), 'lowest': ('Sol', 2)},
+        'Baixo': {'range': (12, 16), 'lowest': ('Mi', 2)}
+    }
+    
+    # Converter nota mais grave para número
+    lowest_num = 0
+    closest_type = 'Soprano'  # Valor padrão
+    
+    for voice_type, specs in voice_types.items():
+        ref_lowest = specs['lowest']
+        ref_lowest_num = ref_lowest[1] * 12 + NOTES_PT.index(ref_lowest[0])
+        if lowest_num <= ref_lowest_num:
+            lowest_num = ref_lowest_num
+            closest_type = voice_type
+    
+    return closest_type
+
+def get_voice_gender(voice_type: str) -> str:
+    """Retorna se a voz é masculina ou feminina de acordo com o tipo de voz."""
+    femininas = ['Soprano', 'Mezzo-soprano', 'Contralto']
+    masculinas = ['Tenor', 'Barítono', 'Baixo']
+    if voice_type in femininas:
+        return 'Feminina'
+    if voice_type in masculinas:
+        return 'Masculina'
+    return 'Indefinida'
+
+def generate_note_audio(note: str, octave: int) -> str:
+    """Gera um arquivo de áudio WAV válido para uma nota específica e retorna em base64."""
+    pt_to_en = {
+        'Dó': 'C', 'Dó#': 'C#', 'Ré': 'D', 'Ré#': 'D#', 'Mi': 'E',
+        'Fá': 'F', 'Fá#': 'F#', 'Sol': 'G', 'Sol#': 'G#', 'Lá': 'A', 'Lá#': 'A#', 'Si': 'B'
+    }
+    note_en = pt_to_en.get(note, note)
+    # Encontrar o número MIDI correto
+    notes_en = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    if note_en == 'C' and octave == 8:
+        midi_num = 108  # C8 é a última nota do piano
+    else:
+        # Para todas as outras notas
+        midi_num = notes_en.index(note_en) + 12 * (octave + 1)
+    # Calcular frequência
+    frequency = 440 * (2 ** ((midi_num - 69) / 12))
+    synthesizer = Synthesizer(osc1_waveform=Waveform.sine, osc1_volume=1.0, use_osc2=False)
+    audio = synthesizer.generate_constant_wave(frequency, 2.0)
+    audio = (audio * 32767).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(audio.tobytes())
+    audio_bytes = buffer.getvalue()
+    audio_base64 = base64.b64encode(audio_bytes).decode()
+    return audio_base64
+
+def get_audio_html(note: str, octave: int) -> str:
+    """Gera o HTML para o player de áudio.
+    
+    Args:
+        note: Nota musical
+        octave: Número da oitava
+        
+    Returns:
+        String com o HTML do player
+    """
+    audio_base64 = generate_note_audio(note, octave)
+    return f"""
+    <audio controls style="width: 100%;">
+        <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
+        Seu navegador não suporta o elemento de áudio.
+    </audio>
+    """
+
+def get_all_piano_notes() -> list:
+    """Gera uma lista de todas as notas do piano de Dó1 até Dó8 no padrão brasileiro, começando cada oitava em Dó."""
+    notes_pt = ['Dó', 'Dó#', 'Ré', 'Ré#', 'Mi', 'Fá', 'Fá#', 'Sol', 'Sol#', 'Lá', 'Lá#', 'Si']
+    notes = []
+    for octave in range(1, 9):  # Dó1 até Dó8
+        for note in notes_pt:
+            # Não incluir notas acima de Dó8
+            if octave == 8 and note != 'Dó':
+                continue
+            notes.append((note, octave))
+    return notes
+
+def get_voice_ranges_pt() -> list:
+    """Retorna as faixas típicas de cada classificação vocal (notas em português, oitava 1-8), conforme padrão do usuário."""
+    return [
+        {"tipo": "Baixo", "faixa": ("Dó1", "Fá3"), "famosos": "Barry White", "genero": "Masculina"},
+        {"tipo": "Barítono", "faixa": ("Sol1", "Lá3"), "famosos": "Anderson Freire", "genero": "Masculina"},
+        {"tipo": "Tenor", "faixa": ("Dó2", "Ré4"), "famosos": "Luan Santana", "genero": "Masculina"},
+        {"tipo": "Contralto", "faixa": ("Fá2", "Dó4"), "famosos": "Ivete Sangalo", "genero": "Feminina"},
+        {"tipo": "Mezzo-soprano", "faixa": ("Lá2", "Dó5"), "famosos": "Christina Aguilera", "genero": "Feminina"},
+        {"tipo": "Soprano", "faixa": ("Dó3", "Fá5"), "famosos": "Mariah Carey", "genero": "Feminina"},
+    ]
+
+def run_vocal_test(calc: VocalRangeCalculator) -> Tuple[str, int, str, int]:
+    """Executa um teste interativo para descobrir a extensão vocal do usuário.
+    
+    Args:
+        calc: Instância da calculadora de extensão vocal
+        
+    Returns:
+        Tupla contendo (nota mais grave, oitava mais grave, nota mais aguda, oitava mais aguda)
+    """
+    st.markdown("""
+    ## 🎤 Teste de Extensão Vocal
+    
+    Vamos descobrir sua extensão vocal! Siga os passos abaixo:
+    
+    1. **Preparação**:
+       - Encontre um lugar silencioso
+       - Aqueça sua voz por alguns minutos
+       - Tenha um copo d'água por perto
+    
+    2. **Como fazer o teste**:
+       - Cante cada nota por 2-3 segundos
+       - Use a vogal "A" (como em "pai")
+       - Pare se sentir desconforto
+       - Faça pausas entre as notas
+    """)
+    
+    # Gerar todas as notas do piano
+    reference_notes = get_all_piano_notes()
+    
+    # Estado do teste
+    if 'vocal_test_low' not in st.session_state:
+        st.session_state['vocal_test_low'] = None
+    if 'vocal_test_high' not in st.session_state:
+        st.session_state['vocal_test_high'] = None
+
+    # Passo 1: nota mais grave
+    if st.session_state['vocal_test_low'] is None:
+        st.subheader("🎯 Teste de Notas do Piano (Dó1 até Dó8)")
+        st.markdown("Cante cada nota da mais grave para a mais aguda. Pare quando não conseguir mais cantar confortavelmente.")
+        cols = st.columns(6)
+        for i, (note, octave) in enumerate(reference_notes):
+            with cols[i % 6]:
+                st.markdown(f"""
+                <div style='text-align: center; padding: 0.5rem; border: 1px solid #ddd; border-radius: 8px; margin: 0.2rem 0;'>
+                    <h4 style='margin: 0;'>{note}{octave}</h4>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown(get_audio_html(note, octave), unsafe_allow_html=True)
+                if st.button("Posso cantar", key=f"low_{note}{octave}", use_container_width=True):
+                    st.session_state['vocal_test_low'] = (note, octave)
+                    st.rerun()
+        st.warning("Por favor, tente cantar pelo menos uma nota para continuar.")
+        return None, None, None, None
+
+    # Passo 2: nota mais aguda
+    lowest_note, lowest_octave = st.session_state['vocal_test_low']
+    if st.session_state['vocal_test_high'] is None:
+        st.progress(0.5)
+        st.markdown("""
+        <div style='text-align: center; margin: 1rem 0;'>
+            <h3>✅ Nota mais grave encontrada!</h3>
+            <p>Agora vamos testar as notas mais agudas.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.subheader("🎯 Teste de Notas Agudas (Dó1 até Dó8)")
+        st.markdown("Agora vamos testar as notas mais agudas. Comece da nota mais aguda e vá descendo.")
+        cols = st.columns(6)
+        for i, (note, octave) in enumerate(reversed(reference_notes)):
+            if (calc.note_to_number(note, octave) <= calc.note_to_number(lowest_note, lowest_octave)):
+                continue
+            with cols[i % 6]:
+                st.markdown(f"""
+                <div style='text-align: center; padding: 0.5rem; border: 1px solid #ddd; border-radius: 8px; margin: 0.2rem 0;'>
+                    <h4 style='margin: 0;'>{note}{octave}</h4>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown(get_audio_html(note, octave), unsafe_allow_html=True)
+                if st.button("Posso cantar", key=f"high_{note}{octave}", use_container_width=True):
+                    st.session_state['vocal_test_high'] = (note, octave)
+                    st.rerun()
+        st.warning("Por favor, tente cantar pelo menos uma nota aguda para continuar.")
+        return None, None, None, None
+
+    # Exibir resultado final
+    lowest_note, lowest_octave = st.session_state['vocal_test_low']
+    highest_note, highest_octave = st.session_state['vocal_test_high']
+    total_range = calc.note_to_number(highest_note, highest_octave) - calc.note_to_number(lowest_note, lowest_octave)
+    voice_type = get_voice_type(total_range, lowest_note, lowest_octave)
+    voice_gender = get_voice_gender(voice_type)
+    notas_alcancadas = []
+    lowest_num = calc.note_to_number(lowest_note, lowest_octave)
+    highest_num = calc.note_to_number(highest_note, highest_octave)
+    for n in range(lowest_num, highest_num + 1):
+        nota, oitava = calc.number_to_note(n)
+        notas_alcancadas.append(f"{nota}{oitava}")
+
+    # Encontrar todas as classificações compatíveis
+    faixas_compat = []
+    for v in get_voice_ranges_pt():
+        faixa_low, faixa_high = v['faixa']
+        faixa_low_note, faixa_low_oct = faixa_low[:-1], int(faixa_low[-1])
+        faixa_high_note, faixa_high_oct = faixa_high[:-1], int(faixa_high[-1])
+        faixa_low_num = calc.note_to_number(faixa_low_note, faixa_low_oct)
+        faixa_high_num = calc.note_to_number(faixa_high_note, faixa_high_oct)
+        # Se houver interseção entre a extensão do usuário e a faixa da classificação
+        if not (highest_num < faixa_low_num or lowest_num > faixa_high_num):
+            faixas_compat.append(v['tipo'])
+
+    st.success(f"""
+    🎉 Sua extensão vocal foi identificada!
+    
+    ### 📊 Resultados:
+    - **Nota mais grave:** {lowest_note}{lowest_octave}
+    - **Nota mais aguda:** {highest_note}{highest_octave}
+    - **Extensão total:** {total_range} semitons
+    - **Classificações vocais compatíveis:** {', '.join(faixas_compat)}
+    """)
+    st.markdown(f"Notas alcançadas: <span style='color:#667eea;font-weight:bold'>{' - '.join(notas_alcancadas)}</span>", unsafe_allow_html=True)
+
+    # Tabela visual das classificações
+    st.markdown("""
+    <h4>Classificações vocais e exemplos:</h4>
+    <table style='width:100%; border-collapse:collapse;'>
+      <tr style='background:#f8f9fa;'>
+        <th style='padding:6px; border:1px solid #ccc;'>Classificação</th>
+        <th style='padding:6px; border:1px solid #ccc;'>Faixa típica</th>
+        <th style='padding:6px; border:1px solid #ccc;'>Exemplo famoso</th>
+      </tr>
+    """, unsafe_allow_html=True)
+    for v in get_voice_ranges_pt():
+        faixa = f"{v['faixa'][0]} até {v['faixa'][1]}"
+        destaque = "background:#d4edda;" if v["tipo"] in faixas_compat else ""
+        st.markdown(f"""
+        <tr style='{destaque}'>
+          <td style='padding:6px; border:1px solid #ccc;'><b>{v['tipo']}</b></td>
+          <td style='padding:6px; border:1px solid #ccc;'>{faixa}</td>
+          <td style='padding:6px; border:1px solid #ccc;'>{v['famosos']}</td>
+        </tr>
+        """, unsafe_allow_html=True)
+    st.markdown("</table>", unsafe_allow_html=True)
+
+    st.markdown("""
+    <b>O que é classificação vocal?</b><br>
+    Classificar a voz é identificar a faixa de notas que você consegue cantar confortavelmente, considerando também sua tessitura (faixa confortável), timbre e características físicas. No canto erudito e coral, a classificação é fundamental para escolher repertório e posição no grupo. No canto popular, o mais importante é cantar com conforto e adaptar o tom das músicas para sua voz.
+    <br><br>
+    <b>Dica:</b> Sua classificação vocal é uma referência baseada na extensão, mas o mais importante é cantar onde você se sente confortável! Se sua voz cobre mais de uma faixa, escolha a região onde cantar é mais fácil e natural para você.<br>
+    <b>Importante:</b> Para iniciantes e adolescentes, a voz pode mudar com o tempo. Só após a maturação vocal é possível uma classificação definitiva.<br>
+    <b>Tessitura</b> é a faixa de notas onde sua voz soa melhor e com menos esforço. Não force para alcançar notas extremas!
+    <br><br>
+    Para uma avaliação precisa e orientações técnicas, procure um professor de canto.
+    """, unsafe_allow_html=True)
+
+    st.info("""
+    **Anote suas notas mais grave e aguda!**
+    
+    Para usar o conversor de tonalidade, mude para o modo "Entrar manualmente" no menu lateral e preencha as notas que você descobriu aqui.
+    """)
+    if st.button("🔄 Refazer teste de extensão vocal"):
+        st.session_state['vocal_test_low'] = None
+        st.session_state['vocal_test_high'] = None
+        st.rerun()
+    return lowest_note, lowest_octave, highest_note, highest_octave
+
 def main() -> None:
     """Função principal da aplicação."""
     # Configuração da página
@@ -590,67 +874,62 @@ def main() -> None:
     # Criar instância da calculadora
     calc = VocalRangeCalculator()
 
-    # Sidebar para entrada de dados
-    st.sidebar.header("📊 Configurações")
+    # Controle de tela: 'calculadora' ou 'teste'
+    if 'tela' not in st.session_state:
+        st.session_state['tela'] = 'calculadora'
 
-    # Obter entradas do usuário
-    singer_low_note, singer_low_octave, singer_high_note, singer_high_octave = get_singer_inputs()
-    song_low_note, song_low_octave, song_high_note, song_high_octave, original_key = get_song_inputs(calc)
-
-    # Margem de conforto
-    comfort_margin = st.sidebar.slider("Margem de Conforto (semitons)", 0, 5, 5)
-
-    # Botão para calcular
-    calculate_button = st.sidebar.button("🔍 Analisar", type="primary", use_container_width=True)
-
-    # Área principal - Resultados
-    if calculate_button:
-        try:
-            # Definir extensões
-            vocal_range = calc.define_vocal_range(
-                singer_low_note, singer_low_octave, 
-                singer_high_note, singer_high_octave
-            )
-
-            song_range = calc.define_song_range(
-                song_low_note, song_low_octave,
-                song_high_note, song_high_octave,
-                original_key
-            )
-
-            # Calcular transposição
-            transpose, message, new_key = calc.calculate_transposition(
-                vocal_range, song_range, comfort_margin
-            )
-
-            # Preparar dados para exibição
-            suggested_key_data = None
-            if transpose is not None:
-                # Calcular música transposta e margens
-                new_lowest = song_range["lowest"] + transpose
-                new_highest = song_range["highest"] + transpose
-                new_lowest_note, new_lowest_octave = calc.number_to_note(new_lowest)
-                new_highest_note, new_highest_octave = calc.number_to_note(new_highest)
-                margin_low = new_lowest - vocal_range["lowest"]
-                margin_high = vocal_range["highest"] - new_highest
-
-                suggested_key_data = {
-                    "new_lowest_note": new_lowest_note,
-                    "new_lowest_octave": new_lowest_octave,
-                    "new_highest_note": new_highest_note,
-                    "new_highest_octave": new_highest_octave,
-                    "margin_low": margin_low,
-                    "margin_high": margin_high
-                }
-
-            # Exibir resultados
-            display_results(calc, vocal_range, song_range, original_key, transpose, new_key, suggested_key_data)
-
-        except Exception as e:
-            st.error(f"Erro ao calcular: {str(e)}")
-    else:
-        # Exibir instruções
-        display_instructions()
+    if st.session_state['tela'] == 'calculadora':
+        st.sidebar.header("📊 Configurações")
+        st.sidebar.markdown("---")
+        if st.sidebar.button("🎤 Fazer teste de extensão vocal", use_container_width=True):
+            st.session_state['tela'] = 'teste'
+            st.rerun()
+        # Calculadora modo manual
+        singer_low_note, singer_low_octave, singer_high_note, singer_high_octave = get_singer_inputs()
+        song_low_note, song_low_octave, song_high_note, song_high_octave, original_key = get_song_inputs(calc)
+        comfort_margin = st.sidebar.slider("Margem de Conforto (semitons)", 0, 5, 5)
+        calculate_button = st.sidebar.button("🔍 Analisar", type="primary", use_container_width=True)
+        if calculate_button:
+            try:
+                vocal_range = calc.define_vocal_range(
+                    singer_low_note, singer_low_octave, 
+                    singer_high_note, singer_high_octave
+                )
+                song_range = calc.define_song_range(
+                    song_low_note, song_low_octave,
+                    song_high_note, song_high_octave,
+                    original_key
+                )
+                transpose, message, new_key = calc.calculate_transposition(
+                    vocal_range, song_range, comfort_margin
+                )
+                suggested_key_data = None
+                if transpose is not None:
+                    new_lowest = song_range["lowest"] + transpose
+                    new_highest = song_range["highest"] + transpose
+                    new_lowest_note, new_lowest_octave = calc.number_to_note(new_lowest)
+                    new_highest_note, new_highest_octave = calc.number_to_note(new_highest)
+                    margin_low = new_lowest - vocal_range["lowest"]
+                    margin_high = vocal_range["highest"] - new_highest
+                    suggested_key_data = {
+                        "new_lowest_note": new_lowest_note,
+                        "new_lowest_octave": new_lowest_octave,
+                        "new_highest_note": new_highest_note,
+                        "new_highest_octave": new_highest_octave,
+                        "margin_low": margin_low,
+                        "margin_high": margin_high
+                    }
+                display_results(calc, vocal_range, song_range, original_key, transpose, new_key, suggested_key_data)
+            except Exception as e:
+                st.error(f"Erro ao calcular: {str(e)}")
+        else:
+            display_instructions()
+    elif st.session_state['tela'] == 'teste':
+        st.sidebar.header("🔙 Voltar")
+        if st.sidebar.button("⬅️ Voltar para a calculadora", use_container_width=True):
+            st.session_state['tela'] = 'calculadora'
+            st.rerun()
+        run_vocal_test(calc)
 
 if __name__ == "__main__":
     main()

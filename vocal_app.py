@@ -826,20 +826,26 @@ def run_vocal_test(calc: VocalRangeCalculator) -> Tuple[str, int, str, int]:
     st.markdown("""
     <h4>Classificações vocais e exemplos:</h4>
     <table style='width:100%; border-collapse:collapse;'>
-      <tr style='background:#f8f9fa;'>
-        <th style='padding:6px; border:1px solid #ccc;'>Classificação</th>
-        <th style='padding:6px; border:1px solid #ccc;'>Faixa típica</th>
-        <th style='padding:6px; border:1px solid #ccc;'>Exemplo famoso</th>
+      <tr style='background:#f0f0f0;'>
+        <th style='padding:8px; border:1px solid #bbb; color:#222; font-weight:bold;'>Classificação</th>
+        <th style='padding:8px; border:1px solid #bbb; color:#222; font-weight:bold;'>Faixa típica</th>
+        <th style='padding:8px; border:1px solid #bbb; color:#222; font-weight:bold;'>Exemplo famoso</th>
       </tr>
     """, unsafe_allow_html=True)
     for v in get_voice_ranges_pt():
         faixa = f"{v['faixa'][0]} até {v['faixa'][1]}"
-        destaque = "background:#d4edda;" if v["tipo"] in faixas_compat else ""
+        if v["genero"] == "Masculina":
+            base_color = "#e3f0ff"
+            border_color = "#4a90e2"
+        else:
+            base_color = "#ffe3f0"
+            border_color = "#e24a90"
+        destaque = f"background:{base_color}; border:2.5px solid {border_color}; font-weight:bold;" if v["tipo"] in faixas_compat else f"background:{base_color}; border:1px solid #bbb;"
         st.markdown(f"""
-        <tr style='{destaque}'>
-          <td style='padding:6px; border:1px solid #ccc;'><b>{v['tipo']}</b></td>
-          <td style='padding:6px; border:1px solid #ccc;'>{faixa}</td>
-          <td style='padding:6px; border:1px solid #ccc;'>{v['famosos']}</td>
+        <tr>
+          <td style='padding:8px; {destaque} color:#222;'>{v['tipo']}</td>
+          <td style='padding:8px; {destaque} color:#222;'>{faixa}</td>
+          <td style='padding:8px; {destaque} color:#222;'>{v['famosos']}</td>
         </tr>
         """, unsafe_allow_html=True)
     st.markdown("</table>", unsafe_allow_html=True)
